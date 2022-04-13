@@ -2,12 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"fullservice/db"
 	"fullservice/middlewares"
 	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-redis/redis/v8"
 )
 
 const (
@@ -25,14 +27,21 @@ func Square(n int) int {
 
 func main() {
 	r := chi.NewRouter()
-	// A good base middleware stack
+
+	// Middleware Initialization
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-
 	r.Use(middlewares.Json)
 
+	// Connect Cache + Databases
+	cache := db.New()
+	defer cache.Close()
+	val, err := cache.Get("Hello")
+	log.Println(val, err == redis.Nil)
+
+	// Route Definitions
 	r.Get("/", HomePage)
 	r.Mount("/admin", AdminRouter())
 
@@ -41,7 +50,5 @@ func main() {
 }
 
 func HomePage(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	key := CompositeKey{1, 2}
-	json.NewEncoder(w).Encode(key)
+	json.NewEncoder(w).Encode(CompositeKey{1, 2})
 }
