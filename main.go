@@ -6,6 +6,8 @@ import (
 	"fullservice/middlewares"
 	"log"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
@@ -13,7 +15,7 @@ import (
 )
 
 const (
-	PORT = ":5000"
+	PORT = ":8080"
 )
 
 type CompositeKey struct {
@@ -21,34 +23,82 @@ type CompositeKey struct {
 	Y int `json:"y"`
 }
 
-func Square(n int) int {
-	return n * n
+type Server struct {
+	Mux       chi.Mux
+	Cache     db.CacheStore
+	Mutex     sync.RWMutex
+	mutexOnce *sync.Once
+}
+
+var cache = db.New()
+
+func NewServer() *Server {
+	return &Server{
+		Mux:   *chi.NewRouter(),
+		Cache: db.New(),
+	}
 }
 
 func main() {
-	r := chi.NewRouter()
-
+	server := NewServer()
 	// Middleware Initialization
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middlewares.Json)
+	server.Mux.Use(middleware.RequestID)
+	server.Mux.Use(middleware.RealIP)
+	server.Mux.Use(middleware.Logger)
+	server.Mux.Use(middleware.Recoverer)
+	server.Mux.Use(middlewares.Json)
 
 	// Connect Cache + Databases
-	cache := db.New()
 	defer cache.Close()
 	val, err := cache.Get("Hello")
 	log.Println(val, err == redis.Nil)
 
 	// Route Definitions
-	r.Get("/", HomePage)
-	r.Mount("/admin", AdminRouter())
+	server.Mux.Get("/", HomePageHandler)
+	server.Mux.Get("/setex", SetExpiryHandler)
+	server.Mux.Get("/get", GetFromCacheHandler)
+	server.Mux.Mount("/admin", AdminRouter())
 
 	log.Printf("Serving http server on port %s", PORT)
-	http.ListenAndServe(PORT, r)
+	err = http.ListenAndServe(PORT, server)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
 }
 
-func HomePage(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.Mux.ServeHTTP(w, r)
+}
+
+func HomePageHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(CompositeKey{1, 2})
+}
+
+func SetExpiryHandler(w http.ResponseWriter, r *http.Request) {
+	err := cache.SetEx("test", CompositeKey{1, 3}, 30*time.Second)
+	if err != nil {
+		log.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(CompositeKey{1, 2})
+}
+
+func GetFromCacheHandler(w http.ResponseWriter, r *http.Request) {
+	val, err := cache.Get("test")
+
+	if err == redis.Nil {
+		log.Println(err)
+		w.WriteHeader(http.StatusPartialContent)
+		return
+	}
+
+	if err != nil {
+		log.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(val)
 }

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"time"
 
@@ -10,7 +11,8 @@ import (
 
 type CacheStore interface {
 	Get(key string) (string, error)
-	Set(key string) error
+	Set(key string, value interface{}) error
+	SetEx(key string, value interface{}, expiry time.Duration) error
 	Close()
 }
 
@@ -39,10 +41,22 @@ func (st *Store) Get(key string) (string, error) {
 	return val, err
 }
 
-func (st *Store) Set(key string) error {
+func (st *Store) Set(key string, value interface{}) error {
 	return nil
 }
 
+func (st *Store) SetEx(key string, value interface{}, expiry time.Duration) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	res, err := st.rdb.SetEX(ctx, key, string(data), expiry).Result()
+	log.Println(res)
+	return err
+}
+
 func (st *Store) Close() {
-	st.Close()
+	st.rdb.Close()
 }
